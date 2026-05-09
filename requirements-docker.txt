@@ -1,0 +1,7 @@
+Flask>=2.3.0
+Flask-Login>=0.6.0
+paramiko>=3.0.0
+bcrypt>=4.1.0
+apache-libcloud>=3.8.0
+PyMySQL>=1.1.0
+SQLAlchemy>=2.0.0

@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+.pytest_cache/
+
+# Databases
+*.db
+users.db
+audit.db
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+*.swp
+
+# Environment
+.env
+.env.local
+
+# Docker
+docker-compose.override.yml
