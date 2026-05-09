@@ -1,0 +1,24 @@
+[cloudstack]
+url = http://172.16.100.9:8080/client/api
+api_key = 0q7D8hdCPaDED3Y-YfwwjRtA_MfemseHzlU2kMlBr_FmH9nvUi-zns-mrxAoJ0xM8N28LNtSaFQu1_odoO4BlQ
+secret_key = tL4xFFOS7a9CjPaZcFYUsqBYf_fsO2JybljVgAau9lKnzQSbSKGUcMuSpUoG6nd0nV_CewPv4ogU1FSUBLPf6A
+
+[ceph]
+snap_trim_script = /tmp/snap-trim.sh
+default_keep = 3
+
+[ceph:zone1]
+ssh_host = 172.16.100.3
+ssh_user = root
+ssh_password = Iamadm1n!!
+
+[ceph:zone2]
+ssh_host = 172.16.100.4
+ssh_user = root
+ssh_password = Iamadm1n!!
+
+[app]
+host = 0.0.0.0
+port = 5000
+debug = false
+secret_key = ceph-snapshot-manager-secret-key-2024

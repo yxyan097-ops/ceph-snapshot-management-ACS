@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ceph 快照管理</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="header">
+        <h1>Ceph 快照管理</h1>
+        <div class="header-actions">
+            <label class="checkbox-label">
+                <input type="checkbox" id="dryRunMode" checked>
+                Dry Run
+            </label>
+            <div class="keep-control">
+                <label for="keepCount">保留</label>
+                <input type="number" id="keepCount" value="3" min="0">
+                <span>份</span>
+            </div>
+            <button id="cephMonitorBtn" class="btn-secondary" title="Ceph 状态">集群状态</button>
+            <button id="refreshBtn" class="btn-secondary">刷新</button>
+            <a href="/audit" class="btn-secondary" style="text-decoration: none;">审计</a>
+            <button id="stopBtn" class="btn-danger" style="display: none;">停止</button>
+            <button id="logoutBtn" class="btn-secondary">登出</button>
+        </div>
+    </div>
+
+    <div class="main-layout">
+        <div class="sidebar">
+            <h3>Zone 列表</h3>
+            <div id="zoneList" class="zone-list">
+                <div class="loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="content">
+            <div class="toolbar">
+                <span id="currentZone">选择 Zone</span>
+                <div class="batch-actions">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="selectAll">
+                        全选
+                    </label>
+                    <button id="batchCreateBtn" class="btn-small btn-create" disabled>批量创建 (<span id="createSelectedCount">0</span>)</button>
+                    <button id="batchDeleteBtn" class="btn-small btn-danger" disabled>批量删除 (<span id="selectedCount">0</span>)</button>
+                </div>
+            </div>
+
+            <div id="volumeTable" class="volume-table">
+                <table>
+                    <thead>
+                        <tr>
+                            <th style="width: 40px;"><input type="checkbox" id="selectAllHeader"></th>
+                            <th data-sort="name" class="sortable" onclick="doSort('name')">卷名称 <span class="sort-icon"></span></th>
+                            <th data-sort="instance_name" class="sortable" onclick="doSort('instance_name')">实例名称 <span class="sort-icon"></span></th>
+                            <th>卷 ID</th>
+                            <th data-sort="type" class="sortable" onclick="doSort('type')">类型 <span class="sort-icon"></span></th>
+                            <th data-sort="size" class="sortable" onclick="doSort('size')">大小 <span class="sort-icon"></span></th>
+                            <th style="width: 70px;" data-sort="snapshot_count" class="sortable" onclick="doSort('snapshot_count')">快照数 <span class="sort-icon"></span></th>
+                            <th style="width: 70px;">操作</th>
+                            <th style="width: 40px;">详情</th>
+                        </tr>
+                    </thead>
+                    <tbody id="volumeListBody">
+                        <tr><td colspan="9" class="loading">请选择 Zone</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination-bar">
+                <button id="prevPage" disabled>上一页</button>
+                <span id="pageInfo">第 1 页 / 共 1 页</span>
+                <span>共 <span id="totalVolumes">0</span> 个卷</span>
+                <button id="nextPage" disabled>下一页</button>
+                <select id="pageSize">
+                    <option value="10">10/页</option>
+                    <option value="20" selected>20/页</option>
+                    <option value="50">50/页</option>
+                    <option value="100">100/页</option>
+                </select>
+            </div>
+
+            <div class="log-section" id="logSection">
+                <h3>
+                    <span>操作日志</span>
+                    <button class="fullscreen-btn" id="fullscreenLogBtn">全屏</button>
+                </h3>
+                <div id="logArea" class="log-area"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="confirmModal" class="modal">
+        <div class="modal-content">
+            <h3>确认清理</h3>
+            <p id="confirmMessage"></p>
+            <div class="modal-actions">
+                <button id="confirmCancel" class="btn-secondary">取消</button>
+                <button id="confirmOk" class="btn-primary" style="width: auto;">确认</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="cephFloatingWindow" class="ceph-floating-window" style="display: none;">
+        <div class="ceph-floating-header" id="cephFloatingHeader">
+            <span class="ceph-floating-title" id="cephFloatingTitle">Ceph 集群状态</span>
+            <button class="ceph-floating-close" id="cephFloatingClose">&times;</button>
+        </div>
+        <div class="ceph-floating-content" id="cephFloatingContent">
+            <div class="ceph-status-loading">加载中...</div>
+        </div>
+    </div>
+
+    <div id="snapshotModal" class="modal">
+        <div class="modal-content" style="max-width: 560px;">
+            <h3>快照详情 <span id="snapshotVolumeName" style="font-weight: 400; color: var(--text-muted);"></span></h3>
+            <div id="snapshotList" class="snapshot-list"></div>
+            <div class="modal-actions">
+                <button id="snapshotClose" class="btn-secondary">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="createSnapshotModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <h3>创建快照 <span id="createSnapVolumeName" style="font-weight: 400; color: var(--text-muted);"></span></h3>
+            <div class="form-group">
+                <label for="snapshotNameInput">快照名称</label>
+                <input type="text" id="snapshotNameInput" placeholder="输入快照名称" style="width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box;">
+            </div>
+            <div class="modal-actions">
+                <button id="createSnapCancel" class="btn-secondary">取消</button>
+                <button id="createSnapOk" class="btn-primary">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="batchCreateSnapshotModal" class="modal">
+        <div class="modal-content" style="max-width: 400px;">
+            <h3>批量创建快照 <span id="batchCreateSnapCount" style="font-weight: 400; color: var(--text-muted);"></span></h3>
+            <div class="form-group">
+                <label for="batchSnapshotNameInput">快照名称</label>
+                <input type="text" id="batchSnapshotNameInput" placeholder="输入快照名称" style="width: 100%; padding: 8px; margin-top: 5px; box-sizing: border-box;">
+            </div>
+            <div class="modal-actions">
+                <button id="batchCreateSnapCancel" class="btn-secondary">取消</button>
+                <button id="batchCreateSnapOk" class="btn-primary">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        'use strict';
+
+        let currentZoneId = null;
+        let currentZoneName = null;
+        let volumes = [];
+        let dryRun = true;
+        let currentPage = 1;
+        let pageSize = 20;
+        let sortField = 'name';
+        let sortOrder = 'asc';
+        let selectedVolumes = new Set();
+        let stopRequested = false;
+        let isExecuting = false;
+
+        // Elements
+        const dryRunCheckbox = document.getElementById('dryRunMode');
+        const keepCountInput = document.getElementById('keepCount');
+        const logArea = document.getElementById('logArea');
+        const pageSizeSelect = document.getElementById('pageSize');
+        const batchDeleteBtn = document.getElementById('batchDeleteBtn');
+        const selectedCountSpan = document.getElementById('selectedCount');
+
+        // Init
+        dryRunCheckbox.addEventListener('change', () => {
+            dryRun = dryRunCheckbox.checked;
+            addLog(dryRun ? '[模式] Dry Run 已开启' : '[模式] 实际执行');
+        });
+
+        document.getElementById('refreshBtn').addEventListener('click', loadZones);
+        document.getElementById('logoutBtn').addEventListener('click', logout);
+        pageSizeSelect.addEventListener('change', () => {
+            pageSize = parseInt(pageSizeSelect.value);
+            currentPage = 1;
+            renderVolumeTable();
+        });
+
+        // Stop button
+        document.getElementById('stopBtn').addEventListener('click', () => {
+            if (isExecuting) {
+                stopRequested = true;
+                addLog('[停止] 请求已发送，将在完成当前操作后停止...');
+            }
+        });
+
+        // Select all header checkbox
+        document.getElementById('selectAllHeader').addEventListener('change', (e) => {
+            const checked = e.target.checked;
+            if (checked) {
+                volumes.forEach(v => selectedVolumes.add(v.id));
+            } else {
+                selectedVolumes.clear();
+            }
+            document.querySelectorAll('.volume-checkbox').forEach(cb => cb.checked = checked);
+            updateBatchDeleteButton();
+        });
+
+        // Select all toolbar checkbox
+        document.getElementById('selectAll').addEventListener('change', (e) => {
+            const checked = e.target.checked;
+            if (checked) {
+                volumes.forEach(v => selectedVolumes.add(v.id));
+            } else {
+                selectedVolumes.clear();
+            }
+            document.querySelectorAll('.volume-checkbox').forEach(cb => cb.checked = checked);
+            updateBatchDeleteButton();
+        });
+
+        // Batch delete
+        batchDeleteBtn.addEventListener('click', batchCleanup);
+
+        // Batch create
+        document.getElementById('batchCreateBtn').addEventListener('click', showBatchCreateSnapshotModal);
+
+        // Pagination
+        document.getElementById('prevPage').addEventListener('click', () => {
+            if (currentPage > 1) { currentPage--; renderVolumeTable(); }
+        });
+        document.getElementById('nextPage').addEventListener('click', () => {
+            if (currentPage < Math.ceil(volumes.length / pageSize)) { currentPage++; renderVolumeTable(); }
+        });
+
+        // Modal
+        document.getElementById('confirmCancel').addEventListener('click', () => {
+            document.getElementById('confirmModal').style.display = 'none';
+        });
+        document.getElementById('snapshotClose').addEventListener('click', () => {
+            document.getElementById('snapshotModal').style.display = 'none';
+        });
+        document.getElementById('createSnapCancel').addEventListener('click', () => {
+            document.getElementById('createSnapshotModal').style.display = 'none';
+        });
+        document.getElementById('createSnapOk').addEventListener('click', () => {
+            const input = document.getElementById('snapshotNameInput');
+            const name = input.value.trim();
+            if (!name) { alert('请输入快照名称'); return; }
+            const volId = input.dataset.volumeId;
+            const volName = input.dataset.volumeName;
+            document.getElementById('createSnapshotModal').style.display = 'none';
+            createSnapshot(volId, name, volName);
+            input.value = '';
+        });
+
+        // Log fullscreen
+        document.getElementById('fullscreenLogBtn').addEventListener('click', () => {
+            const logSection = document.getElementById('logSection');
+            logSection.classList.toggle('fullscreen');
+        });
+
+        // ========== Functions ==========
+
+        function doSort(field) {
+            if (sortField === field) {
+                sortOrder = sortOrder === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortField = field;
+                sortOrder = 'asc';
+            }
+            sortVolumes();
+            currentPage = 1;
+            renderVolumeTable();
+            updateSortIcons();
+        }
+        window.doSort = doSort;
+
+        function updateBatchDeleteButton() {
+            const someSelected = selectedVolumes.size > 0;
+            const allSelected = volumes.length > 0 && selectedVolumes.size === volumes.length;
+            const checkedBoxes = document.querySelectorAll('.volume-checkbox:checked');
+            const allBoxes = document.querySelectorAll('.volume-checkbox');
+            const currentPageAllSelected = allBoxes.length > 0 && checkedBoxes.length === allBoxes.length;
+
+            document.getElementById('selectAllHeader').checked = allSelected || currentPageAllSelected;
+            document.getElementById('selectAllHeader').indeterminate = someSelected && !allSelected && !currentPageAllSelected;
+            document.getElementById('selectAll').checked = allSelected;
+            document.getElementById('selectAll').indeterminate = someSelected && !allSelected;
+
+            batchDeleteBtn.disabled = !someSelected;
+            selectedCountSpan.textContent = selectedVolumes.size;
+
+            document.getElementById('batchCreateBtn').disabled = !someSelected;
+            document.getElementById('createSelectedCount').textContent = selectedVolumes.size;
+        }
+
+        function sortVolumes() {
+            volumes.sort((a, b) => {
+                let va = a[sortField] ?? '';
+                let vb = b[sortField] ?? '';
+                if (typeof va === 'string') { va = va.toLowerCase(); vb = vb.toLowerCase(); }
+                if (va < vb) return sortOrder === 'asc' ? -1 : 1;
+                if (va > vb) return sortOrder === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+
+        function updateSortIcons() {
+            document.querySelectorAll('th.sortable').forEach(th => {
+                const icon = th.querySelector('.sort-icon');
+                icon.textContent = th.dataset.sort === sortField ? (sortOrder === 'asc' ? ' ↑' : ' ↓') : '';
+            });
+        }
+
+        function updatePagination() {
+            const totalPages = Math.ceil(volumes.length / pageSize) || 1;
+            document.getElementById('pageInfo').textContent = `第 ${currentPage} / ${totalPages} 页`;
+            document.getElementById('prevPage').disabled = currentPage <= 1;
+            document.getElementById('nextPage').disabled = currentPage >= totalPages;
+        }
+
+        async function logout() {
+            await fetch('/api/auth/logout', { method: 'POST' });
+            window.location.href = '/';
+        }
+
+        async function loadZones() {
+            const zoneList = document.getElementById('zoneList');
+            zoneList.innerHTML = '<div class="loading">加载中...</div>';
+            try {
+                const res = await fetch('/api/zones');
+                const data = await res.json();
+                if (data.error) { zoneList.innerHTML = '<div class="error">' + data.error + '</div>'; return; }
+                zoneList.innerHTML = data.zones.map(z =>
+                    `<div class="zone-item" data-zone-id="${z.id}">${z.name}</div>`
+                ).join('');
+                zoneList.querySelectorAll('.zone-item').forEach(el => {
+                    el.addEventListener('click', () => selectZone(el.dataset.zoneId, el.textContent));
+                });
+                if (data.zones.length > 0) selectZone(data.zones[0].id, data.zones[0].name);
+            } catch (err) {
+                zoneList.innerHTML = '<div class="error">加载失败</div>';
+                addLog('[错误] Zone 列表加载失败');
+            }
+        }
+
+        async function selectZone(zoneId, zoneName) {
+            currentZoneId = zoneId;
+            currentZoneName = zoneName;
+            currentPage = 1;
+            document.querySelectorAll('.zone-item').forEach(el => el.classList.remove('active'));
+            document.querySelector(`[data-zone-id="${zoneId}"]`).classList.add('active');
+            document.getElementById('currentZone').textContent = zoneName;
+            // Update Ceph floating window title
+            const cephTitle = document.getElementById('cephFloatingTitle');
+            if (cephTitle) cephTitle.textContent = 'Ceph 集群状态 - ' + zoneName;
+            await loadVolumes(zoneId);
+            // Restart Ceph polling with new zone
+            if (cephInterval) {
+                stopCeph();
+                startCeph();
+            }
+        }
+
+        async function loadVolumes(zoneId) {
+            const tbody = document.getElementById('volumeListBody');
+            tbody.innerHTML = '<tr><td colspan="7" class="loading">加载中...</td></tr>';
+            try {
+                const res = await fetch(`/api/zones/${zoneId}/volumes`);
+                const data = await res.json();
+                if (data.error) { tbody.innerHTML = '<tr><td colspan="8" class="error">' + data.error + '</td></tr>'; return; }
+                volumes = (data.volumes || []).filter(v => v.type === 'DATADISK' || v.type === 'ROOT');
+                document.getElementById('totalVolumes').textContent = volumes.length;
+                if (volumes.length === 0) { tbody.innerHTML = '<tr><td colspan="8" class="loading">暂无卷</td></tr>'; }
+                else { sortVolumes(); renderVolumeTable(); updateSortIcons(); }
+                addLog('[信息] 已加载 ' + volumes.length + ' 个卷');
+            } catch (err) {
+                tbody.innerHTML = '<tr><td colspan="8" class="error">加载失败</td></tr>';
+                addLog('[错误] 卷列表加载失败');
+            }
+        }
+
+        function renderVolumeTable() {
+            const tbody = document.getElementById('volumeListBody');
+            const start = (currentPage - 1) * pageSize;
+            const pageVols = volumes.slice(start, start + pageSize);
+
+            tbody.innerHTML = pageVols.map(vol => `
+                <tr>
+                    <td><input type="checkbox" class="volume-checkbox" data-id="${vol.id}" ${selectedVolumes.has(vol.id) ? 'checked' : ''}></td>
+                    <td><span class="vol-name">${vol.name || vol.id}</span></td>
+                    <td>${vol.instance_name || '-'}</td>
+                    <td><span class="vol-id">${vol.id}</span></td>
+                    <td><span class="tag">${vol.type}</span></td>
+                    <td>${formatSize(vol.size)}</td>
+                    <td style="text-align: center;"><span class="count">${vol.snapshot_count || 0}</span></td>
+                    <td>
+                        <button class="btn-small btn-create" data-id="${vol.id}" data-name="${vol.name || vol.id}">创建</button>
+                        <button class="btn-small btn-cleanup" data-id="${vol.id}" data-name="${vol.name || vol.id}">清理</button>
+                    </td>
+                    <td>
+                        <button class="btn-small btn-view" data-id="${vol.id}" data-name="${vol.name || vol.id}">详情</button>
+                    </td>
+                </tr>
+            `).join('');
+
+            // Bind events
+            tbody.querySelectorAll('.volume-checkbox').forEach(cb => {
+                cb.addEventListener('change', e => {
+                    e.target.checked ? selectedVolumes.add(cb.dataset.id) : selectedVolumes.delete(cb.dataset.id);
+                    updateBatchDeleteButton();
+                });
+            });
+            tbody.querySelectorAll('.btn-cleanup').forEach(btn => {
+                btn.addEventListener('click', () => showCleanupConfirm(btn.dataset.id, btn.dataset.name));
+            });
+            tbody.querySelectorAll('.btn-view').forEach(btn => {
+                btn.addEventListener('click', () => showSnapshotModal(btn.dataset.id, btn.dataset.name));
+            });
+            tbody.querySelectorAll('.btn-create').forEach(btn => {
+                btn.addEventListener('click', () => showCreateSnapshotModal(btn.dataset.id, btn.dataset.name));
+            });
+            updatePagination();
+        }
+
+        function showCleanupConfirm(volumeId, volumeName) {
+            const keep = keepCountInput.value || 0;
+            const mode = dryRun ? '预览' : '执行';
+            document.getElementById('confirmMessage').innerHTML =
+                `确认${mode}卷 <strong>${volumeName}</strong> 的快照清理？<br><br>将保留最新 ${keep} 个快照${dryRun ? '<br><em style="color:var(--text-muted)">(Dry Run 模式，不会实际删除)</em>' : '<br><em style="color:var(--danger)">此操作不可恢复！</em>'}`;
+            document.getElementById('confirmModal').style.display = 'flex';
+            document.getElementById('confirmOk').onclick = () => {
+                document.getElementById('confirmModal').style.display = 'none';
+                executeCleanup(volumeId, volumeName, parseInt(keep));
+            };
+        }
+
+        async function executeCleanup(volumeId, volumeName, keepCount) {
+            addLog(`[清理] ${volumeName} 开始清理（保留 ${keepCount} 个）...`);
+            try {
+                const res = await fetch('/api/cleanup', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ zone_id: currentZoneId, zone_name: currentZoneName, disk_id: volumeId, keep_count: keepCount, dry_run: dryRun })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    addLog(`[清理] ${volumeName} ` + (dryRun ? '预览完成' : '清理完成'));
+                    if (!dryRun) await loadVolumes(currentZoneId);
+                } else {
+                    addLog(`[错误] ${volumeName} ${data.error || data.message}`);
+                }
+            } catch (err) { addLog(`[错误] ${volumeName} ${err.message}`); }
+        }
+
+        async function batchCleanup() {
+            const selected = Array.from(selectedVolumes);
+            if (!selected.length) return;
+            const keep = parseInt(keepCountInput.value) || 0;
+            const mode = dryRun ? '预览' : '执行';
+
+            // Check cluster health before batch operation (skip in dry run)
+            if (!dryRun) {
+                try {
+                    const healthRes = await fetch(`/api/health?zone_name=${encodeURIComponent(currentZoneName)}`);
+                    const healthData = await healthRes.json();
+                    if (!healthData.can_proceed) {
+                        addLog(`[错误] 集群状态不允许操作：${healthData.proceed_message || '未知错误'}`);
+                        return;
+                    }
+                } catch (e) {
+                    addLog(`[错误] 无法获取集群状态：${e.message}`);
+                    return;
+                }
+            }
+
+            if (!confirm(`确认${mode} ${selected.length} 个卷的快照清理？\n保留最新 ${keep} 个快照${dryRun ? '\n(Dry Run)' : '\n不可恢复！'}`)) return;
+
+            isExecuting = true; stopRequested = false;
+            document.getElementById('stopBtn').style.display = 'inline-block';
+            batchDeleteBtn.disabled = true;
+            addLog(`[批量] 开始${mode} ${selected.length} 个卷的快照清理...`);
+
+            let ok = 0, fail = 0, skip = 0;
+            for (const vid of selected) {
+                if (stopRequested) { addLog(`[批量] 已停止，跳过`); skip++; continue; }
+                const vol = volumes.find(v => v.id === vid);
+                const name = vol ? (vol.name || vid) : vid;
+                try {
+                    const res = await fetch('/api/cleanup', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ zone_id: currentZoneId, zone_name: currentZoneName, disk_id: vid, keep_count: keep, dry_run: dryRun })
+                    });
+                    const d = await res.json();
+                    if (d.success) {
+                        ok++;
+                        addLog(`[批量] ${name} ` + (dryRun ? '预览完成' : '完成'));
+                    } else {
+                        fail++;
+                        addLog(`[批量] ${name} 失败：${d.error || d.message || '未知错误'}`);
+                    }
+                } catch { fail++; addLog(`[批量] ${name} 失败`); }
+                await new Promise(r => setTimeout(r, 200));
+            }
+
+            isExecuting = false; stopRequested = false;
+            document.getElementById('stopBtn').style.display = 'none';
+            batchDeleteBtn.disabled = false;
+            selectedVolumes.clear();
+            updateBatchDeleteButton();
+            addLog(`[批量] 完成：成功 ${ok}，失败 ${fail}，跳过 ${skip}`);
+            await loadVolumes(currentZoneId);
+        }
+
+        async function showSnapshotModal(volumeId, volumeName) {
+            const modal = document.getElementById('snapshotModal');
+            const list = document.getElementById('snapshotList');
+            document.getElementById('snapshotVolumeName').textContent = volumeName;
+            list.innerHTML = '<div class="loading">加载中...</div>';
+            modal.style.display = 'flex';
+
+            try {
+                const res = await fetch(`/api/volumes/${volumeId}/ceph_snapshots`);
+                const data = await res.json();
+                if (data.error) { list.innerHTML = '<div class="error">' + data.error + '</div>'; return; }
+                const snaps = data.snapshots || [];
+                if (!snaps.length) { list.innerHTML = '<div class="loading">暂无快照</div>'; return; }
+
+                list.innerHTML = snaps.map(s => `
+                    <div class="snapshot-item">
+                        <div class="snapshot-info">
+                            <span class="snapshot-name">${s.name}</span>
+                            <span class="snapshot-time">${s.timestamp || ''}</span>
+                            <span class="snapshot-protected ${s.protected === 'true' ? 'protected' : 'unprotected'}">${s.protected === 'true' ? '已保护' : '未保护'}</span>
+                        </div>
+                        <div class="snapshot-actions">
+                            ${s.protected === 'true'
+                                ? `<button class="btn-small btn-view" onclick="unprotectSnap('${volumeId}','${s.name}','${volumeName}','${currentZoneName}')">取消保护</button>`
+                                : `<button class="btn-small btn-protect" onclick="protectSnap('${volumeId}','${s.name}','${volumeName}','${currentZoneName}')">保护</button>`
+                            }
+                            <button class="btn-small btn-danger" onclick="deleteSnap('${volumeId}','${s.name}','${volumeName}','${currentZoneName}')" ${s.protected === 'true' ? 'disabled title="请先取消保护"' : ''}>删除</button>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) { list.innerHTML = '<div class="error">加载失败</div>'; }
+        }
+
+        async function protectSnap(vid, snap, vname, zoneName) {
+            if (!confirm(`确认保护快照 "${snap}"？`)) return;
+            addLog(`[保护] ${vname}/${snap}...`);
+            try {
+                const res = await fetch('/api/snapshots/protect', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ volume_id: vid, snapshot_name: snap, zone_name: zoneName })
+                });
+                const d = await res.json();
+                addLog(d.success ? `[保护] ${snap} 保护成功` : `[错误] 保护失败：${d.error}`);
+                if (d.success) showSnapshotModal(vid, vname);
+            } catch (e) { addLog(`[错误] ${e.message}`); }
+        }
+
+        async function unprotectSnap(vid, snap, vname, zoneName) {
+            if (!confirm(`确认取消保护快照 "${snap}"？`)) return;
+            addLog(`[取消保护] ${vname}/${snap}...`);
+            try {
+                const res = await fetch('/api/snapshots/unprotect', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ volume_id: vid, snapshot_name: snap, zone_name: zoneName })
+                });
+                const d = await res.json();
+                addLog(d.success ? `[取消保护] ${snap} 已取消保护` : `[错误] 取消保护失败：${d.error}`);
+                if (d.success) showSnapshotModal(vid, vname);
+            } catch (e) { addLog(`[错误] ${e.message}`); }
+        }
+        window.protectSnap = protectSnap;
+        window.unprotectSnap = unprotectSnap;
+        window.deleteSnap = deleteSnap;
+
+        async function deleteSnap(vid, snap, vname, zoneName) {
+            const mode = dryRun ? '预览' : '删除';
+            if (!confirm(`确认${mode}快照 "${snap}"？${dryRun ? '\n(Dry Run)' : '\n不可恢复！'}`)) return;
+            addLog(`[删除] ${vname}/${snap} (${mode})...`);
+            try {
+                const res = await fetch('/api/snapshots/delete', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ volume_id: vid, snapshot_name: snap, dry_run: dryRun, zone_name: zoneName })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    addLog(d.dry_run ? `[删除] ${snap} 预览：${d.output || d.message}` : `[删除] ${snap} 已删除`);
+                    if (!d.dry_run) showSnapshotModal(vid, vname);
+                } else {
+                    addLog(`[错误] ${snap} 删除失败：${d.error}`);
+                }
+            } catch (e) { addLog(`[错误] ${e.message}`); }
+        }
+
+        function showCreateSnapshotModal(volumeId, volumeName) {
+            const modal = document.getElementById('createSnapshotModal');
+            document.getElementById('createSnapVolumeName').textContent = volumeName;
+            const input = document.getElementById('snapshotNameInput');
+            input.dataset.volumeId = volumeId;
+            input.dataset.volumeName = volumeName;
+            input.value = '';
+            modal.style.display = 'flex';
+            input.focus();
+        }
+
+        async function createSnapshot(volumeId, snapshotName, volumeName) {
+            addLog(`[创建] ${volumeName} 创建快照 "${snapshotName}"...`);
+            try {
+                const res = await fetch('/api/snapshots/create', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ volume_id: volumeId, snapshot_name: snapshotName, zone_name: currentZoneName })
+                });
+                const d = await res.json();
+                if (d.success) {
+                    addLog(`[创建] ${volumeName}/${snapshotName} 创建成功`);
+                    await loadVolumes(currentZoneId);
+                } else {
+                    const errMsg = d.error || d.message || '未知错误';
+                    addLog(`[错误] ${volumeName}/${snapshotName} 创建失败：${errMsg}`);
+                    if (d.output) addLog(`[详情] ${d.output}`);
+                }
+            } catch (e) { addLog(`[错误] ${e.message}`); }
+        }
+
+        // Batch create modal handlers
+        document.getElementById('batchCreateSnapCancel').addEventListener('click', () => {
+            document.getElementById('batchCreateSnapshotModal').style.display = 'none';
+        });
+
+        document.getElementById('batchCreateSnapOk').addEventListener('click', () => {
+            const input = document.getElementById('batchSnapshotNameInput');
+            const name = input.value.trim();
+            if (!name) { alert('请输入快照名称'); return; }
+            document.getElementById('batchCreateSnapshotModal').style.display = 'none';
+            batchCreateSnapshot(name);
+            input.value = '';
+        });
+
+        function showBatchCreateSnapshotModal() {
+            const modal = document.getElementById('batchCreateSnapshotModal');
+            const count = selectedVolumes.size;
+            document.getElementById('batchCreateSnapCount').textContent = `(${count} 个卷)`;
+            modal.style.display = 'flex';
+            document.getElementById('batchSnapshotNameInput').focus();
+        }
+
+        async function batchCreateSnapshot(snapshotName) {
+            const selected = Array.from(selectedVolumes);
+            if (!selected.length) return;
+
+            isExecuting = true;
+            document.getElementById('stopBtn').style.display = 'inline-block';
+            document.getElementById('batchCreateBtn').disabled = true;
+            addLog(`[批量创建] 开始为 ${selected.length} 个卷创建快照 "${snapshotName}"...`);
+
+            let ok = 0, fail = 0;
+            for (let i = 0; i < selected.length; i++) {
+                if (stopRequested) { addLog(`[批量创建] 已停止`); break; }
+                const vid = selected[i];
+                const vol = volumes.find(v => v.id === vid);
+                const name = vol ? (vol.name || vid) : vid;
+
+                try {
+                    const res = await fetch('/api/snapshots/create', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ volume_id: vid, snapshot_name: snapshotName, zone_name: currentZoneName })
+                    });
+                    const d = await res.json();
+                    if (d.success) {
+                        addLog(`[创建] ${name}/${snapshotName} 成功`);
+                        ok++;
+                    } else {
+                        const errMsg = d.error || d.message || '未知错误';
+                        addLog(`[错误] ${name}/${snapshotName} 创建失败：${errMsg}`);
+                        fail++;
+                    }
+                } catch (e) {
+                    addLog(`[错误] ${name} 创建失败：${e.message}`);
+                    fail++;
+                }
+
+                // Delay 3 seconds between each volume (except the last one)
+                if (i < selected.length - 1 && !stopRequested) {
+                    addLog(`[批量创建] 等待 3 秒后处理下一个卷...`);
+                    await new Promise(r => setTimeout(r, 3000));
+                }
+            }
+
+            isExecuting = false;
+            stopRequested = false;
+            document.getElementById('stopBtn').style.display = 'none';
+            updateBatchDeleteButton();
+            addLog(`[批量创建] 完成：成功 ${ok}，失败 ${fail}`);
+            await loadVolumes(currentZoneId);
+        }
+
+        function formatSize(bytes) {
+            if (!bytes) return '0 B';
+            const u = ['B','KB','MB','GB','TB'];
+            let i = 0, v = parseFloat(bytes);
+            while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+            return v.toFixed(1) + ' ' + u[i];
+        }
+
+        let userScrolled = false;
+        function addLog(msg) {
+            const t = new Date().toLocaleTimeString();
+            const line = document.createElement('div');
+            line.className = 'log-line';
+            line.textContent = '[' + t + '] ' + msg;
+            logArea.appendChild(line);
+            if (!userScrolled) logArea.scrollTop = logArea.scrollHeight;
+        }
+        logArea.addEventListener('scroll', () => {
+            userScrolled = logArea.scrollHeight - logArea.scrollTop - logArea.clientHeight > 50;
+        });
+
+        // ========== Ceph Monitor ==========
+        let cephInterval = null;
+        const cephWin = document.getElementById('cephFloatingWindow');
+        const cephHeader = document.getElementById('cephFloatingHeader');
+        const cephContent = document.getElementById('cephFloatingContent');
+
+        function initCeph() {
+            const savedPos = JSON.parse(localStorage.getItem('cephPos') || '{}');
+            if (savedPos.top) cephWin.style.top = savedPos.top;
+            if (savedPos.left) { cephWin.style.left = savedPos.left; cephWin.style.right = 'auto'; }
+            if (localStorage.getItem('cephVisible') !== 'false') { cephWin.style.display = 'block'; startCeph(); }
+
+            document.getElementById('cephMonitorBtn').addEventListener('click', () => {
+                const hide = cephWin.style.display !== 'none';
+                cephWin.style.display = hide ? 'none' : 'block';
+                localStorage.setItem('cephVisible', !hide);
+                if (!hide) startCeph();
+                else stopCeph();
+            });
+            document.getElementById('cephFloatingClose').addEventListener('click', () => {
+                cephWin.style.display = 'none';
+                localStorage.setItem('cephVisible', 'false');
+                stopCeph();
+            });
+
+            setupCephDrag();
+        }
+
+        function setupCephDrag() {
+            let drag = false, sx, sy, lx, ly;
+            cephHeader.addEventListener('mousedown', e => {
+                if (e.target.tagName === 'BUTTON') return;
+                drag = true; sx = e.clientX; sy = e.clientY;
+                const r = cephWin.getBoundingClientRect();
+                lx = r.left; ly = r.top;
+                document.body.style.cursor = 'move';
+            });
+            document.addEventListener('mousemove', e => {
+                if (!drag) return;
+                cephWin.style.left = (lx + e.clientX - sx) + 'px';
+                cephWin.style.top = (ly + e.clientY - sy) + 'px';
+                cephWin.style.right = 'auto';
+            });
+            document.addEventListener('mouseup', () => {
+                if (drag) {
+                    drag = false;
+                    document.body.style.cursor = '';
+                    const r = cephWin.getBoundingClientRect();
+                    localStorage.setItem('cephPos', JSON.stringify({ top: r.top + 'px', left: r.left + 'px' }));
+                }
+            });
+        }
+
+        function startCeph() { if (cephInterval) return; fetchCeph(); cephInterval = setInterval(fetchCeph, 3000); }
+        function stopCeph() { if (cephInterval) { clearInterval(cephInterval); cephInterval = null; } }
+
+        async function fetchCeph() {
+            try {
+                const url = currentZoneName ? `/api/health?zone_name=${encodeURIComponent(currentZoneName)}` : '/api/health';
+                const res = await fetch(url);
+                const d = await res.json();
+                updateCephDisplay(d);
+            } catch { cephContent.innerHTML = '<div class="ceph-status-error">连接失败</div>'; }
+        }
+
+        function updateCephDisplay(d) {
+            const t = new Date().toLocaleTimeString();
+            if (!d.status) {
+                cephContent.innerHTML = '<div class="ceph-pg-row"><span class="ceph-pg-label">状态</span><span class="ceph-pg-value ceph-status-error">连接失败</span></div>';
+                return;
+            }
+            const pg = d.status.pgmap || {};
+            const pgs = pg.pgs_by_state || [];
+            let total = 0, activeClean = 0, abnormal = [];
+            pgs.forEach(p => {
+                total += p.count || 0;
+                if (p.state_name === 'active+clean') activeClean = p.count || 0;
+                else abnormal.push(p);
+            });
+            const can = d.can_proceed !== false;
+            const cls = can ? 'ceph-status-ok' : 'ceph-status-error';
+
+            cephContent.innerHTML = `
+                <div class="ceph-pg-row"><span class="ceph-pg-label">操作</span><span class="ceph-pg-value ${cls}">${can ? '可执行' : '禁止'}</span></div>
+                ${!can && d.proceed_message ? `<div class="ceph-pg-row"><span class="ceph-pg-label" style="color:var(--danger)">${d.proceed_message}</span></div>` : ''}
+                <div class="ceph-pg-row"><span class="ceph-pg-label">PG总数</span><span class="ceph-pg-value">${total}</span></div>
+                <div class="ceph-pg-row"><span class="ceph-pg-label">active+clean</span><span class="ceph-pg-value ceph-status-ok">${activeClean}</span></div>
+                ${abnormal.map(a => `<div class="ceph-pg-row" style="background:rgba(251,191,36,0.1)"><span class="ceph-pg-label" style="color:var(--warning)">${a.state_name}</span><span class="ceph-pg-value" style="color:var(--warning)">${a.count}</span></div>`).join('')}
+                <div class="ceph-pg-timestamp">${t}</div>
+            `;
+        }
+
+        // Init
+        window.addEventListener('load', () => {
+            addLog('页面已加载');
+            loadZones();
+            initCeph();
+        });
+    })();
+    </script>
+</body>
+</html>
