@@ -1,0 +1,664 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ceph 快照管理</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        /* Volume page specific styles */
+        .page-header {
+            background: var(--teal);
+            color: white;
+            padding: 15px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(13, 148, 136, 0.3);
+        }
+        .page-header h1 { font-size: 1.2rem; font-weight: 600; }
+        .nav-links { display: flex; gap: 8px; align-items: center; }
+        .nav-links a {
+            color: white;
+            text-decoration: none;
+            padding: 7px 14px;
+            background: rgba(255,255,255,0.15);
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            transition: background 0.2s;
+        }
+        .nav-links a:hover { background: rgba(255,255,255,0.25); }
+        .nav-links .user-info { font-size: 13px; opacity: 0.9; }
+        .nav-links .btn-logout {
+            background: rgba(255,255,255,0.1);
+            border: 1px solid rgba(255,255,255,0.3);
+            cursor: pointer;
+        }
+
+        .main-content {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+
+        /* Zone selector */
+        .zone-bar {
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .zone-bar label { font-weight: 500; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+        .zone-select {
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 14px;
+            min-width: 250px;
+            background: var(--surface);
+            color: var(--text);
+        }
+        .zone-select:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-glow); }
+
+        /* Filter bar */
+        .filter-bar {
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            padding: 16px 20px;
+            margin-bottom: 16px;
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            align-items: center;
+        }
+        .filter-bar .search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 8px 12px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 14px;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .filter-bar .search-input:focus { outline: none; border-color: var(--teal); box-shadow: 0 0 0 3px var(--teal-glow); }
+        .filter-bar .search-input::placeholder { color: var(--text-muted); }
+
+        .filter-group {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .filter-group label { font-size: 12px; color: var(--text-muted); white-space: nowrap; }
+        .filter-group select {
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            font-size: 13px;
+            background: var(--surface);
+            color: var(--text);
+        }
+        .filter-group select:focus { outline: none; border-color: var(--teal); }
+
+        .filter-stats {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .filter-stats strong { color: var(--teal); }
+
+        /* Volume table */
+        .volume-card {
+            background: var(--surface);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-sm);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        .volume-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .volume-table th {
+            padding: 12px 16px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+            background: var(--surface-alt);
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+        .volume-table th:hover { background: var(--border-subtle); }
+        .volume-table th .sort-icon { margin-left: 4px; font-size: 10px; opacity: 0.5; }
+        .volume-table th.sorted .sort-icon { opacity: 1; color: var(--teal); }
+
+        .volume-table td {
+            padding: 11px 16px;
+            border-bottom: 1px solid var(--border-subtle);
+            font-size: 13px;
+            color: var(--text);
+        }
+        .volume-table tbody tr { transition: background 0.15s; }
+        .volume-table tbody tr:hover { background: var(--teal-light); }
+        .volume-table tbody tr:last-child td { border-bottom: none; }
+
+        /* Badges */
+        .badge {
+            display: inline-block;
+            padding: 3px 10px;
+            border-radius: 20px;
+            font-size: 11px;
+            font-weight: 500;
+            line-height: 1.4;
+        }
+        .badge-state-inuse { background: #d1fae5; color: #065f46; }
+        .badge-state-allocated { background: #fef3c7; color: #92400e; }
+        .badge-state-unknown { background: #e5e7eb; color: #374151; }
+        .badge-state-creating { background: #dbeafe; color: #1e40af; }
+        .badge-state-destroying { background: #fee2e2; color: #991b1b; }
+
+        .badge-type-root { background: #ede9fe; color: #5b21b6; }
+        .badge-type-datadisk { background: #e0f2fe; color: #075985; }
+
+        .badge-os-windows { background: #dbeafe; color: #1e40af; }
+        .badge-os-linux { background: #d1fae5; color: #065f46; }
+        .badge-os-unknown { background: #e5e7eb; color: #374151; }
+
+        .volume-name { font-weight: 500; color: var(--text); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .instance-name { color: var(--text-secondary); max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .os-version { color: var(--text-secondary); font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .size-cell { font-family: var(--mono); font-size: 12px; color: var(--text-secondary); white-space: nowrap; }
+        .snapshot-count { font-weight: 600; }
+        .snapshot-count.has-snaps { color: var(--teal); }
+        .snapshot-count.no-snaps { color: var(--text-muted); }
+
+        /* Action buttons */
+        .action-btns { display: flex; gap: 6px; }
+        .action-btn {
+            padding: 5px 10px;
+            border: none;
+            border-radius: var(--radius-sm);
+            font-size: 12px;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+        }
+        .action-btn:active { transform: scale(0.96); }
+        .action-btn-snap { background: var(--teal); color: white; }
+        .action-btn-snap:hover { background: var(--teal-hover); }
+        .action-btn-clean { background: var(--amber); color: white; }
+        .action-btn-clean:hover { background: #b45309; }
+        .action-btn-view { background: var(--surface-alt); color: var(--text-secondary); border: 1px solid var(--border); }
+        .action-btn-view:hover { background: var(--border-subtle); }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.4; }
+        .empty-state p { font-size: 14px; }
+
+        /* Loading */
+        .loading-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-muted);
+        }
+        .loading-spinner {
+            display: inline-block;
+            width: 32px;
+            height: 32px;
+            border: 3px solid var(--border);
+            border-top-color: var(--teal);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-bottom: 12px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Tooltip */
+        .tooltip {
+            position: relative;
+            cursor: help;
+        }
+        .tooltip::after {
+            content: attr(data-tip);
+            position: absolute;
+            bottom: 100%;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 4px 8px;
+            background: var(--text);
+            color: white;
+            font-size: 11px;
+            border-radius: 4px;
+            white-space: nowrap;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s;
+        }
+        .tooltip:hover::after { opacity: 1; }
+    </style>
+</head>
+<body>
+    <div class="page-header">
+        <h1>Ceph 快照管理</h1>
+        <div class="nav-links">
+            <span class="user-info" id="userInfo"></span>
+            <a href="/admin/keys">密钥管理</a>
+            <a href="/admin/config">配置</a>
+            <a href="/admin/users">用户</a>
+            <a href="/docs">文档</a>
+            <a href="/audit">审计</a>
+            <button class="btn-logout" onclick="logout()">退出</button>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <!-- Zone selector -->
+        <div class="zone-bar">
+            <label>可用区:</label>
+            <select id="zoneSelect" class="zone-select" onchange="onZoneChange()">
+                <option value="">-- 请选择可用区 --</option>
+            </select>
+            <button class="action-btn action-btn-view" onclick="loadZones()" title="刷新可用区">刷新</button>
+        </div>
+
+        <!-- Filter bar -->
+        <div class="filter-bar" id="filterBar" style="display:none;">
+            <input type="text" class="search-input" id="searchInput"
+                   placeholder="搜索卷名、虚机名称、系统版本..."
+                   oninput="applyFilters()" onkeydown="if(event.key==='Escape'){this.value='';applyFilters()}">
+
+            <div class="filter-group">
+                <label>系统:</label>
+                <select id="osFilter" onchange="applyFilters()">
+                    <option value="">全部</option>
+                    <option value="Windows">Windows</option>
+                    <option value="Linux">Linux</option>
+                    <option value="未知">未知</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>类型:</label>
+                <select id="typeFilter" onchange="applyFilters()">
+                    <option value="">全部</option>
+                    <option value="ROOT">系统盘</option>
+                    <option value="DATADISK">数据盘</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>状态:</label>
+                <select id="stateFilter" onchange="applyFilters()">
+                    <option value="">全部</option>
+                    <option value="inuse">使用中</option>
+                    <option value="allocated">已分配</option>
+                    <option value="creating">创建中</option>
+                    <option value="destroying">销毁中</option>
+                </select>
+            </div>
+
+            <div class="filter-group">
+                <label>快照:</label>
+                <select id="snapFilter" onchange="applyFilters()">
+                    <option value="">全部</option>
+                    <option value="has">有快照</option>
+                    <option value="none">无快照</option>
+                </select>
+            </div>
+
+            <button class="action-btn action-btn-view" onclick="resetFilters()" title="重置筛选">重置</button>
+
+            <div class="filter-stats" id="filterStats"></div>
+        </div>
+
+        <!-- Volume table -->
+        <div class="volume-card">
+            <div id="tableContainer">
+                <div class="loading-state">
+                    <div class="loading-spinner"></div>
+                    <p>请选择可用区以加载卷列表</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let allVolumes = [];
+        let currentSort = { key: 'name', dir: 'asc' };
+
+        // ==================== Data Loading ====================
+
+        function loadUserInfo() {
+            fetch('/api/auth/current_user')
+                .then(r => r.json())
+                .then(data => {
+                    if (!data.authenticated) {
+                        window.location.href = '/login';
+                        return;
+                    }
+                    document.getElementById('userInfo').textContent =
+                        `${data.user.username} (${data.user.role})`;
+                });
+        }
+
+        function loadZones() {
+            fetch('/api/zones')
+                .then(r => r.json())
+                .then(data => {
+                    const select = document.getElementById('zoneSelect');
+                    const current = select.value;
+                    select.innerHTML = '<option value="">-- 请选择可用区 --</option>';
+                    (data.zones || []).forEach(z => {
+                        const opt = document.createElement('option');
+                        opt.value = z.id;
+                        opt.textContent = z.name;
+                        select.appendChild(opt);
+                    });
+                    if (current) select.value = current;
+                })
+                .catch(err => console.error('Failed to load zones:', err));
+        }
+
+        function onZoneChange() {
+            const zoneId = document.getElementById('zoneSelect').value;
+            if (!zoneId) {
+                document.getElementById('filterBar').style.display = 'none';
+                document.getElementById('tableContainer').innerHTML =
+                    '<div class="loading-state"><p>请选择可用区以加载卷列表</p></div>';
+                allVolumes = [];
+                return;
+            }
+            loadVolumes(zoneId);
+        }
+
+        function loadVolumes(zoneId) {
+            const container = document.getElementById('tableContainer');
+            container.innerHTML = '<div class="loading-state"><div class="loading-spinner"></div><p>正在加载卷列表...</p></div>';
+            document.getElementById('filterBar').style.display = 'none';
+
+            fetch(`/api/zones/${zoneId}/volumes`)
+                .then(r => r.json())
+                .then(data => {
+                    allVolumes = data.volumes || [];
+                    document.getElementById('filterBar').style.display = 'flex';
+                    applyFilters();
+                })
+                .catch(err => {
+                    container.innerHTML = `<div class="empty-state"><div class="icon">!</div><p>加载失败: ${err.message}</p></div>`;
+                });
+        }
+
+        // ==================== Filtering & Sorting ====================
+
+        function applyFilters() {
+            const search = document.getElementById('searchInput').value.toLowerCase().trim();
+            const osFilter = document.getElementById('osFilter').value;
+            const typeFilter = document.getElementById('typeFilter').value;
+            const stateFilter = document.getElementById('stateFilter').value;
+            const snapFilter = document.getElementById('snapFilter').value;
+
+            let filtered = allVolumes.filter(v => {
+                // Text search
+                if (search) {
+                    const haystack = [
+                        v.name, v.instance_name, v.os_category, v.os_version, v.id
+                    ].join(' ').toLowerCase();
+                    // Support multiple search terms (AND logic)
+                    const terms = search.split(/\s+/);
+                    if (!terms.every(t => haystack.includes(t))) return false;
+                }
+                // OS filter
+                if (osFilter && v.os_category !== osFilter) return false;
+                // Type filter
+                if (typeFilter && v.type !== typeFilter) return false;
+                // State filter
+                if (stateFilter && v.state !== stateFilter) return false;
+                // Snapshot filter
+                if (snapFilter === 'has' && (!v.snapshot_count || v.snapshot_count === 0)) return false;
+                if (snapFilter === 'none' && v.snapshot_count > 0) return false;
+
+                return true;
+            });
+
+            // Sort
+            filtered.sort((a, b) => {
+                let va = a[currentSort.key] ?? '';
+                let vb = b[currentSort.key] ?? '';
+                if (currentSort.key === 'size' || currentSort.key === 'snapshot_count') {
+                    va = Number(va) || 0;
+                    vb = Number(vb) || 0;
+                } else {
+                    va = String(va).toLowerCase();
+                    vb = String(vb).toLowerCase();
+                }
+                if (va < vb) return currentSort.dir === 'asc' ? -1 : 1;
+                if (va > vb) return currentSort.dir === 'asc' ? 1 : -1;
+                return 0;
+            });
+
+            // Update stats
+            document.getElementById('filterStats').innerHTML =
+                `显示 <strong>${filtered.length}</strong> / ${allVolumes.length} 个卷`;
+
+            renderTable(filtered);
+        }
+
+        function resetFilters() {
+            document.getElementById('searchInput').value = '';
+            document.getElementById('osFilter').value = '';
+            document.getElementById('typeFilter').value = '';
+            document.getElementById('stateFilter').value = '';
+            document.getElementById('snapFilter').value = '';
+            applyFilters();
+        }
+
+        function sortBy(key) {
+            if (currentSort.key === key) {
+                currentSort.dir = currentSort.dir === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort = { key, dir: 'asc' };
+            }
+            applyFilters();
+        }
+
+        // ==================== Rendering ====================
+
+        function formatSize(bytes) {
+            if (!bytes || bytes === 0) return '0 B';
+            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+            let i = 0;
+            let size = bytes;
+            while (size >= 1024 && i < units.length - 1) { size /= 1024; i++; }
+            return size.toFixed(2) + ' ' + units[i];
+        }
+
+        function stateBadge(state) {
+            const map = {
+                'inuse': ['使用中', 'badge-state-inuse'],
+                'allocated': ['已分配', 'badge-state-allocated'],
+                'creating': ['创建中', 'badge-state-creating'],
+                'destroying': ['销毁中', 'badge-state-destroying'],
+            };
+            const [text, cls] = map[state] || [state || '未知', 'badge-state-unknown'];
+            return `<span class="badge ${cls}">${text}</span>`;
+        }
+
+        function typeBadge(type) {
+            if (type === 'ROOT') return '<span class="badge badge-type-root">系统盘</span>';
+            return '<span class="badge badge-type-datadisk">数据盘</span>';
+        }
+
+        function osBadge(osCategory) {
+            if (osCategory === 'Windows') return '<span class="badge badge-os-windows">Windows</span>';
+            if (osCategory === 'Linux') return '<span class="badge badge-os-linux">Linux</span>';
+            return '<span class="badge badge-os-unknown">未知</span>';
+        }
+
+        function renderTable(volumes) {
+            const container = document.getElementById('tableContainer');
+
+            if (volumes.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="icon">0</div><p>没有匹配的卷</p></div>';
+                return;
+            }
+
+            const sortIcon = (key) => {
+                if (currentSort.key !== key) return '<span class="sort-icon">&#9650;&#9660;</span>';
+                return currentSort.dir === 'asc'
+                    ? '<span class="sort-icon">&#9650;</span>'
+                    : '<span class="sort-icon">&#9660;</span>';
+            };
+
+            const sortClass = (key) => currentSort.key === key ? 'sorted' : '';
+
+            let html = `<table class="volume-table">
+                <thead>
+                    <tr>
+                        <th class="${sortClass('name')}" onclick="sortBy('name')">卷名称 ${sortIcon('name')}</th>
+                        <th class="${sortClass('size')}" onclick="sortBy('size')">大小 ${sortIcon('size')}</th>
+                        <th class="${sortClass('state')}" onclick="sortBy('state')">状态 ${sortIcon('state')}</th>
+                        <th class="${sortClass('type')}" onclick="sortBy('type')">类型 ${sortIcon('type')}</th>
+                        <th class="${sortClass('instance_name')}" onclick="sortBy('instance_name')">虚机名称 ${sortIcon('instance_name')}</th>
+                        <th class="${sortClass('os_category')}" onclick="sortBy('os_category')">系统 ${sortIcon('os_category')}</th>
+                        <th class="${sortClass('os_version')}" onclick="sortBy('os_version')">系统版本 ${sortIcon('os_version')}</th>
+                        <th class="${sortClass('snapshot_count')}" onclick="sortBy('snapshot_count')">快照数 ${sortIcon('snapshot_count')}</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            volumes.forEach(v => {
+                const snapClass = v.snapshot_count > 0 ? 'has-snaps' : 'no-snaps';
+                const snapTitle = v.snapshot_count > 0 ? `${v.snapshot_count} 个快照` : '无快照';
+
+                html += `<tr>
+                    <td><div class="volume-name tooltip" data-tip="${v.id}">${v.name}</div></td>
+                    <td class="size-cell">${formatSize(v.size)}</td>
+                    <td>${stateBadge(v.state)}</td>
+                    <td>${typeBadge(v.type)}</td>
+                    <td><div class="instance-name">${v.instance_name || '-'}</div></td>
+                    <td>${osBadge(v.os_category)}</td>
+                    <td><div class="os-version tooltip" data-tip="${v.os_version}">${v.os_version || '-'}</div></td>
+                    <td><span class="snapshot-count ${snapClass}">${v.snapshot_count || 0}</span></td>
+                    <td>
+                        <div class="action-btns">
+                            <button class="action-btn action-btn-snap" onclick="createSnapshot('${v.id}', '${v.name}')" title="创建快照">快照</button>
+                            ${v.snapshot_count > 0 ? `<button class="action-btn action-btn-clean" onclick="cleanupSnapshots('${v.id}', '${v.name}')" title="清理快照">清理</button>` : ''}
+                            <button class="action-btn action-btn-view" onclick="viewSnapshots('${v.id}', '${v.name}')" title="查看快照">详情</button>
+                        </div>
+                    </td>
+                </tr>`;
+            });
+
+            html += '</tbody></table>';
+            container.innerHTML = html;
+        }
+
+        // ==================== Actions ====================
+
+        function createSnapshot(volumeId, volumeName) {
+            const name = prompt(`为卷 "${volumeName}" 创建快照\n请输入快照名称:`, `snap-${new Date().toISOString().slice(0,10)}`);
+            if (!name) return;
+
+            fetch('/api/snapshots/create', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ volume_id: volumeId, snapshot_name: name })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('快照创建成功');
+                    onZoneChange(); // Reload
+                } else {
+                    alert('创建失败: ' + (data.error || '未知错误'));
+                }
+            })
+            .catch(err => alert('请求失败: ' + err));
+        }
+
+        function cleanupSnapshots(volumeId, volumeName) {
+            const keep = prompt(`清理卷 "${volumeName}" 的旧快照\n保留最新几个快照?`, '3');
+            if (!keep || isNaN(keep)) return;
+
+            if (!confirm(`确认清理? 将保留最新 ${keep} 个快照，删除其余快照。`)) return;
+
+            fetch('/api/cleanup', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ disk_id: volumeId, keep_count: parseInt(keep), dry_run: false })
+            })
+            .then(r => r.json())
+            .then(data => {
+                if (data.success) {
+                    alert('清理完成\n' + (data.output || ''));
+                    onZoneChange();
+                } else {
+                    alert('清理失败: ' + (data.error || '未知错误'));
+                }
+            })
+            .catch(err => alert('请求失败: ' + err));
+        }
+
+        function viewSnapshots(volumeId, volumeName) {
+            // Fetch both CloudStack and Ceph snapshots
+            Promise.all([
+                fetch(`/api/volumes/${volumeId}/snapshots`).then(r => r.json()),
+                fetch(`/api/volumes/${volumeId}/ceph_snapshots`).then(r => r.json())
+            ])
+            .then(([csData, cephData]) => {
+                const csSnaps = csData.snapshots || [];
+                const cephSnaps = cephData.snapshots || [];
+
+                let msg = `卷: ${volumeName}\n\n`;
+                msg += `CloudStack 快照 (${csSnaps.length}):\n`;
+                csSnaps.forEach(s => {
+                    msg += `  - ${s.name} [${s.state}] ${s.created}\n`;
+                });
+                msg += `\nCeph RBD 快照 (${cephSnaps.length}):\n`;
+                cephSnaps.forEach(s => {
+                    msg += `  - ${s.name} (protected: ${s.protected || 'no'})\n`;
+                });
+
+                alert(msg);
+            })
+            .catch(err => alert('获取快照失败: ' + err));
+        }
+
+        function logout() {
+            fetch('/api/auth/logout', { method: 'POST' })
+                .then(() => window.location.href = '/');
+        }
+
+        // ==================== Init ====================
+
+        loadUserInfo();
+        loadZones();
+
+        // Keyboard shortcut: Ctrl+K to focus search
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+                e.preventDefault();
+                document.getElementById('searchInput').focus();
+            }
+        });
+    </script>
+</body>
+</html>
