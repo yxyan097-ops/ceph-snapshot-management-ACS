@@ -1,0 +1,20 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y \
+    openssh-client \
+    netcat \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd -m -s /bin/bash agent && \
+    mkdir -p /app/keys && \
+    chown agent:agent /app/keys
+
+COPY scripts/ssh-agent-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+USER agent
+WORKDIR /app
+
+ENTRYPOINT ["/entrypoint.sh"]

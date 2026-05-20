@@ -1,0 +1,64 @@
+version: '3.8'
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: ceph-snapshot-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ceph_snapshot
+    volumes:
+      - mysql_data:/app/mysql/data
+      - ./scripts/init-mysql.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - ceph-snapshot-net
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ssh-key-agent:
+    build:
+      context: .
+      dockerfile: Dockerfile.ssh-agent
+    container_name: ceph-snapshot-ssh-agent
+    restart: unless-stopped
+    volumes:
+      - ssh_keys:/app/keys
+    networks:
+      - ceph-snapshot-net
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+  web-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ceph-snapshot-web
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql+pymysql://root:${MYSQL_ROOT_PASSWORD}@mysql:3306/ceph_snapshot
+      SSH_AGENT_SOCKET: /tmp/ceph-ssh-agent.sock
+    volumes:
+      - app_data:/app/data
+    networks:
+      - ceph-snapshot-net
+    depends_on:
+      mysql:
+        condition: service_healthy
+      ssh-key-agent:
+        condition: service_started
+    ports:
+      - "5000:5000"
+
+networks:
+  ceph-snapshot-net:
+    driver: bridge
+
+volumes:
+  mysql_data:
+  ssh_keys:
+  app_data:
